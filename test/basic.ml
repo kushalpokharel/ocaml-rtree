@@ -85,25 +85,26 @@ let lint_t =
   |+ field "p2" (pair float float) (fun t -> t.p2)
   |> sealr
 
+module R1 =
+  Rtree.Make
+    (Rtree.Rectangle)
+    (struct
+      type t = line
+
+      let t = lint_t
+
+      type envelope = Rtree.Rectangle.t
+
+      let envelope { p1 = x1, y1; p2 = x2, y2 } =
+        let x0 = Float.min x1 x2 in
+        let x1 = Float.max x1 x2 in
+        let y0 = Float.min y1 y2 in
+        let y1 = Float.max y1 y2 in
+        Rtree.Rectangle.v ~x0 ~y0 ~x1 ~y1
+    end)
+
 let test_lines () =
-  let module R =
-    Rtree.Make
-      (Rtree.Rectangle)
-      (struct
-        type t = line
-
-        let t = lint_t
-
-        type envelope = Rtree.Rectangle.t
-
-        let envelope { p1 = x1, y1; p2 = x2, y2 } =
-          let x0 = Float.min x1 x2 in
-          let x1 = Float.max x1 x2 in
-          let y0 = Float.min y1 y2 in
-          let y1 = Float.max y1 y2 in
-          Rtree.Rectangle.v ~x0 ~y0 ~x1 ~y1
-      end)
-  in
+  let module R = R1 in
   let l1 = { p1 = (1., 2.); p2 = (2., 3.) } in
   let index = R.insert (R.empty 8) l1 in
   let l1' = R.find index (Rtree.Rectangle.v ~x0:0. ~y0:0. ~x1:3. ~y1:3.) in
@@ -120,6 +121,29 @@ let test_lines () =
   assert (List.length vs = 2)
 
 let omt_loader () =
+  let module R = R1 in
+  let lines =
+    [
+      { p1 = (0., 0.); p2 = (1., 1.) };
+      { p1 = (1., 1.); p2 = (2., 2.) };
+      { p1 = (2., 2.); p2 = (3., 3.) };
+      { p1 = (3., 3.); p2 = (4., 4.) };
+    ]
+  in
+  let idx = R.load ~max_node_load:2 lines in
+  print_endline (Repr.to_string R.t idx)
+
+let rectangle () =
+  let r1 = Rtree.Rectangle.v ~x0:(-1.) ~y0:(-1.) ~x1:1. ~y1:1. in
+  assert (r1 = Rtree.Rectangle.(merge r1 empty));
+  assert (r1 = Rtree.Rectangle.(merge_many [ r1 ]));
+  let r2 = Rtree.Rectangle.v ~x0:(-2.) ~y0:(-2.) ~x1:0. ~y1:0. in
+  let r3 = Rtree.Rectangle.v ~x0:(-2.) ~y0:(-2.) ~x1:1. ~y1:1. in
+  let r = Rtree.Rectangle.merge_many [ r1; r2 ] in
+  assert (r = r3)
+
+(* Testing iter function *)
+let test_iter () =
   let module R =
     Rtree.Make
       (Rtree.Rectangle)
@@ -146,17 +170,24 @@ let omt_loader () =
       { p1 = (3., 3.); p2 = (4., 4.) };
     ]
   in
-  let idx = R.load ~max_node_load:2 lines in
-  print_endline (Repr.to_string R.t idx)
+  let t = R.load ~max_node_load:2 lines in
+  let points = ref [] in
+  let collect_points = function
+    | R.Leaf lst ->
+        List.map snd lst |> List.iter (fun f -> points := f :: !points)
+    | _ -> ()
+  in
+  R.iter t collect_points;
+  assert (List.length !points = List.length lines)
 
-let rectangle () =
-  let r1 = Rtree.Rectangle.v ~x0:(-1.) ~y0:(-1.) ~x1:1. ~y1:1. in
-  assert (r1 = Rtree.Rectangle.(merge r1 empty));
-  assert (r1 = Rtree.Rectangle.(merge_many [ r1 ]));
-  let r2 = Rtree.Rectangle.v ~x0:(-2.) ~y0:(-2.) ~x1:0. ~y1:0. in
-  let r3 = Rtree.Rectangle.v ~x0:(-2.) ~y0:(-2.) ~x1:1. ~y1:1. in
-  let r = Rtree.Rectangle.merge_many [ r1; r2 ] in
-  assert (r = r3)
+let cube () =
+  let c1 = Rtree.Cube.v ~x0:0. ~y0:0. ~z0:0. ~x1:2. ~y1:2. ~z1:2. in
+  let c2 = Rtree.Cube.v ~x0:1. ~y0:1. ~z0:1. ~x1:3. ~y1:3. ~z1:3. in
+  let c3 = Rtree.Cube.v ~x0:0. ~y0:0. ~z0:0. ~x1:3. ~y1:3. ~z1:3. in
+  assert (Rtree.Cube.(merge c1 empty) = c1);
+  let c = Rtree.Cube.merge_many [ c1; c2 ] in
+  assert (Rtree.Cube.intersects c1 c2 = true);
+  assert (c = c3)
 
 let cube () =
   let c1 = Rtree.Cube.v ~x0:0. ~y0:0. ~z0:0. ~x1:2. ~y1:2. ~z1:2. in
@@ -206,6 +237,7 @@ let suite =
          "lines" >:: test_lines;
          "omt" >:: omt_loader;
          "rect" >:: rectangle;
+         "iter" >:: test_iter;
          "depth" >:: test_depth;
          "cube" >:: cube;
        ]
